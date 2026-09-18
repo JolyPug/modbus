@@ -3,8 +3,9 @@ from __future__ import annotations
 import pathlib
 import queue
 import sys
-import tkinter as tk
-from tkinter import messagebox, ttk
+
+import ttkbootstrap as tb
+from ttkbootstrap.constants import BOTH, LEFT, RIGHT, X, W
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -14,80 +15,107 @@ from common.bridge_tools import TcpSerialClient
 from common.modbus_tools import DEFAULT_BAUDRATES, DEFAULT_PARITIES, DEFAULT_STOPBITS, LogBus, list_serial_ports
 
 
-class ClientApp:
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.root.title("TCP Serial Client")
-        self.root.geometry("760x520")
+class ClientApp(tb.Window):
+    def __init__(self) -> None:
+        super().__init__(title="TCP Serial Client", themename="darkly", size=(820, 560))
+        self.minsize(760, 480)
+
         self.log_bus = LogBus()
         self.client: TcpSerialClient | None = None
 
-        self.host_var = tk.StringVar()
-        self.tcp_port_var = tk.StringVar(value="9000")
-        self.serial_port_var = tk.StringVar()
-        self.baud_var = tk.StringVar(value=str(DEFAULT_BAUDRATES[3]))
-        self.parity_var = tk.StringVar(value="N")
-        self.stopbits_var = tk.StringVar(value="1")
+        self.host_var = tb.StringVar()
+        self.tcp_port_var = tb.StringVar(value="9000")
+        self.serial_port_var = tb.StringVar()
+        self.baud_var = tb.StringVar(value=str(DEFAULT_BAUDRATES[3]))
+        self.parity_var = tb.StringVar(value="N")
+        self.stopbits_var = tb.StringVar(value="1")
+
+        self._settings_widgets: list = []
 
         self._build()
         self.refresh_ports()
-        self.root.after(100, self._drain_logs)
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(100, self._drain_logs)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    # ------------------------------------------------------------------ UI --
     def _build(self) -> None:
-        frame = ttk.Frame(self.root, padding=12)
-        frame.pack(fill="both", expand=True)
+        pad = {"padx": 12, "pady": 8}
 
-        settings = ttk.LabelFrame(frame, text="Настройки", padding=10)
-        settings.pack(fill="x")
+        header = tb.Frame(self)
+        header.pack(fill=X, padx=16, pady=(14, 0))
+        tb.Label(header, text="TCP → Serial Client", font=("Segoe UI", 16, "bold")).pack(side=LEFT)
+        self.status_lbl = tb.Label(header, text="● Отключено", bootstyle="secondary")
+        self.status_lbl.pack(side=RIGHT)
 
-        ttk.Label(settings, text="Server IP").grid(row=0, column=0, sticky="w")
-        ttk.Entry(settings, textvariable=self.host_var, width=18).grid(row=0, column=1, sticky="w", padx=(8, 12))
+        settings = tb.Labelframe(self, text="Настройки", bootstyle="info")
+        settings.pack(fill=X, **pad)
 
-        ttk.Label(settings, text="TCP port").grid(row=0, column=2, sticky="w")
-        ttk.Entry(settings, textvariable=self.tcp_port_var, width=10).grid(row=0, column=3, sticky="w", padx=(8, 12))
+        row1 = tb.Frame(settings)
+        row1.pack(fill=X, padx=10, pady=(8, 4))
+        tb.Label(row1, text="Server IP:").pack(side=LEFT)
+        host_entry = tb.Entry(row1, textvariable=self.host_var, width=16)
+        host_entry.pack(side=LEFT, padx=8)
+        tb.Label(row1, text="TCP порт:").pack(side=LEFT, padx=(12, 0))
+        tcp_entry = tb.Entry(row1, textvariable=self.tcp_port_var, width=8)
+        tcp_entry.pack(side=LEFT, padx=8)
 
-        ttk.Label(settings, text="Локальный COM").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        self.port_box = ttk.Combobox(settings, textvariable=self.serial_port_var, width=18, state="readonly")
-        self.port_box.grid(row=1, column=1, sticky="w", padx=(8, 12), pady=(10, 0))
-        ttk.Button(settings, text="Обновить", command=self.refresh_ports).grid(row=1, column=2, sticky="w", pady=(10, 0))
+        row2 = tb.Frame(settings)
+        row2.pack(fill=X, padx=10, pady=(4, 4))
+        tb.Label(row2, text="Локальный COM:").pack(side=LEFT)
+        self.port_box = tb.Combobox(row2, textvariable=self.serial_port_var, width=16, state="readonly")
+        self.port_box.pack(side=LEFT, padx=8)
+        tb.Button(row2, text="Обновить", bootstyle="secondary-outline", command=self.refresh_ports).pack(side=LEFT)
 
-        ttk.Label(settings, text="Baud").grid(row=2, column=0, sticky="w", pady=(10, 0))
-        ttk.Combobox(settings, textvariable=self.baud_var, values=[str(item) for item in DEFAULT_BAUDRATES], width=10, state="readonly").grid(row=2, column=1, sticky="w", padx=(8, 12), pady=(10, 0))
+        tb.Label(row2, text="   Baud:").pack(side=LEFT, padx=(20, 0))
+        baud_box = tb.Combobox(row2, textvariable=self.baud_var, values=[str(v) for v in DEFAULT_BAUDRATES], width=10, state="readonly")
+        baud_box.pack(side=LEFT, padx=8)
 
-        ttk.Label(settings, text="Parity").grid(row=2, column=2, sticky="w", pady=(10, 0))
-        ttk.Combobox(settings, textvariable=self.parity_var, values=DEFAULT_PARITIES, width=10, state="readonly").grid(row=2, column=3, sticky="w", padx=(8, 12), pady=(10, 0))
+        row3 = tb.Frame(settings)
+        row3.pack(fill=X, padx=10, pady=(4, 10))
+        tb.Label(row3, text="Parity:").pack(side=LEFT)
+        parity_box = tb.Combobox(row3, textvariable=self.parity_var, values=DEFAULT_PARITIES, width=6, state="readonly")
+        parity_box.pack(side=LEFT, padx=8)
+        tb.Label(row3, text="Stop bits:").pack(side=LEFT, padx=(12, 0))
+        stop_box = tb.Combobox(row3, textvariable=self.stopbits_var, values=[str(v) for v in DEFAULT_STOPBITS], width=6, state="readonly")
+        stop_box.pack(side=LEFT, padx=8)
 
-        ttk.Label(settings, text="Stop bits").grid(row=3, column=0, sticky="w", pady=(10, 0))
-        ttk.Combobox(settings, textvariable=self.stopbits_var, values=[str(item) for item in DEFAULT_STOPBITS], width=10, state="readonly").grid(row=3, column=1, sticky="w", padx=(8, 12), pady=(10, 0))
+        self.toggle_btn = tb.Button(row3, text="Старт", bootstyle="success", width=12, command=self._toggle)
+        self.toggle_btn.pack(side=RIGHT)
 
-        buttons = ttk.Frame(frame, padding=(0, 12, 0, 12))
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Старт", command=self.start_client).pack(side="left")
-        ttk.Button(buttons, text="Стоп", command=self.stop_client).pack(side="left", padx=(8, 0))
+        self._settings_widgets = [host_entry, tcp_entry, self.port_box, baud_box, parity_box, stop_box]
 
-        log_frame = ttk.LabelFrame(frame, text="Лог", padding=10)
-        log_frame.pack(fill="both", expand=True)
-        self.log_text = tk.Text(log_frame, wrap="word")
-        self.log_text.pack(fill="both", expand=True)
+        log_frame = tb.Labelframe(self, text="Журнал", bootstyle="secondary")
+        log_frame.pack(fill=BOTH, expand=True, **pad)
+        self.log_text = tb.ScrolledText(log_frame, wrap="word", font=("Consolas", 10))
+        self.log_text.pack(fill=BOTH, expand=True, padx=6, pady=6)
 
+    # ------------------------------------------------------------- helpers --
     def refresh_ports(self) -> None:
         ports = list_serial_ports()
         self.port_box["values"] = ports
         if ports and self.serial_port_var.get() not in ports:
             self.serial_port_var.set(ports[0])
 
+    def _set_settings_state(self, enabled: bool) -> None:
+        combo_state = "readonly" if enabled else "disabled"
+        entry_state = "normal" if enabled else "disabled"
+        for widget in self._settings_widgets:
+            widget.configure(state=entry_state if isinstance(widget, tb.Entry) else combo_state)
+
+    def _toggle(self) -> None:
+        if self.client is None:
+            self.start_client()
+        else:
+            self.stop_client()
+
     def start_client(self) -> None:
-        if self.client is not None:
-            messagebox.showinfo("Client", "Клиент уже запущен.")
-            return
         host = self.host_var.get().strip()
         serial_port = self.serial_port_var.get().strip()
         if not host:
-            messagebox.showerror("Ошибка", "Укажите IP адрес сервера.")
+            tb.dialogs.Messagebox.show_error("Укажите IP адрес сервера.", "Ошибка")
             return
         if not serial_port:
-            messagebox.showerror("Ошибка", "Выберите локальный COM порт.")
+            tb.dialogs.Messagebox.show_error("Выберите локальный COM порт.", "Ошибка")
             return
         try:
             self.client = TcpSerialClient(
@@ -100,16 +128,24 @@ class ClientApp:
                 log=self.log_bus.write,
             )
             self.client.start()
-            self.log_bus.write("Старт клиента.")
         except Exception as exc:
             self.client = None
-            messagebox.showerror("Ошибка", str(exc))
+            tb.dialogs.Messagebox.show_error(str(exc), "Ошибка")
+            return
+
+        self._set_settings_state(False)
+        self.toggle_btn.configure(text="Стоп", bootstyle="danger")
+        self.status_lbl.configure(text=f"● Подключено: {host}:{self.tcp_port_var.get()}", bootstyle="success")
+        self.log_bus.write("Старт клиента.")
 
     def stop_client(self) -> None:
         if self.client is None:
             return
         self.client.stop()
         self.client = None
+        self._set_settings_state(True)
+        self.toggle_btn.configure(text="Старт", bootstyle="success")
+        self.status_lbl.configure(text="● Отключено", bootstyle="secondary")
         self.log_bus.write("Остановка клиента запрошена.")
 
     def _drain_logs(self) -> None:
@@ -120,18 +156,16 @@ class ClientApp:
                 break
             self.log_text.insert("end", line + "\n")
             self.log_text.see("end")
-        self.root.after(100, self._drain_logs)
+        self.after(100, self._drain_logs)
 
     def _on_close(self) -> None:
         if self.client is not None:
             self.client.stop()
-        self.root.destroy()
+        self.destroy()
 
 
 def main() -> int:
-    root = tk.Tk()
-    ClientApp(root)
-    root.mainloop()
+    ClientApp().mainloop()
     return 0
 
 

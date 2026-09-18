@@ -4,8 +4,9 @@ import pathlib
 import queue
 import sys
 import threading
-import tkinter as tk
-from tkinter import messagebox, ttk
+
+import ttkbootstrap as tb
+from ttkbootstrap.constants import BOTH, LEFT, RIGHT, X, W
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -14,86 +15,106 @@ if str(ROOT) not in sys.path:
 from common.modbus_tools import DEFAULT_BAUDRATES, DEFAULT_FUNCTIONS, DEFAULT_PARITIES, DEFAULT_STOPBITS, LogBus, ScanConfig, ScanHit, list_serial_ports, parse_number_list, scan_modbus
 
 
-class ScannerApp:
-    def __init__(self, root: tk.Tk) -> None:
-        self.root = root
-        self.root.title("Modbus Scanner")
-        self.root.geometry("980x700")
+class ScannerApp(tb.Window):
+    def __init__(self) -> None:
+        super().__init__(title="Modbus Scanner", themename="darkly", size=(1020, 760))
+        self.minsize(900, 640)
+
         self.log_bus = LogBus()
         self.stop_event = threading.Event()
         self.worker: threading.Thread | None = None
 
-        self.port_var = tk.StringVar()
-        self.address_start_var = tk.StringVar(value="1")
-        self.address_end_var = tk.StringVar(value="247")
-        self.registers_var = tk.StringVar(value="0-32")
-        self.timeout_var = tk.StringVar(value="0.08")
+        self.port_var = tb.StringVar()
+        self.address_start_var = tb.StringVar(value="1")
+        self.address_end_var = tb.StringVar(value="247")
+        self.registers_var = tb.StringVar(value="0-32")
+        self.timeout_var = tb.StringVar(value="0.08")
 
-        self.baud_vars = {value: tk.BooleanVar(value=True) for value in DEFAULT_BAUDRATES}
-        self.parity_vars = {value: tk.BooleanVar(value=True) for value in DEFAULT_PARITIES}
-        self.stopbits_vars = {value: tk.BooleanVar(value=(value == 1)) for value in DEFAULT_STOPBITS}
-        self.function_vars = {value: tk.BooleanVar(value=True) for value in DEFAULT_FUNCTIONS}
+        self.baud_vars = {value: tb.BooleanVar(value=True) for value in DEFAULT_BAUDRATES}
+        self.parity_vars = {value: tb.BooleanVar(value=True) for value in DEFAULT_PARITIES}
+        self.stopbits_vars = {value: tb.BooleanVar(value=(value == 1)) for value in DEFAULT_STOPBITS}
+        self.function_vars = {value: tb.BooleanVar(value=True) for value in DEFAULT_FUNCTIONS}
+
+        self._settings_widgets: list = []
+        self._hit_count = 0
 
         self._build()
         self.refresh_ports()
-        self.root.after(100, self._drain_logs)
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(100, self._drain_logs)
+        self.after(200, self._watch_worker)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    # ------------------------------------------------------------------ UI --
     def _build(self) -> None:
-        top = ttk.Frame(self.root, padding=12)
-        top.pack(fill="both", expand=True)
+        pad = {"padx": 12, "pady": 8}
 
-        controls = ttk.LabelFrame(top, text="Настройки", padding=10)
-        controls.pack(fill="x")
+        header = tb.Frame(self)
+        header.pack(fill=X, padx=16, pady=(14, 0))
+        tb.Label(header, text="Modbus RTU Scanner", font=("Segoe UI", 16, "bold")).pack(side=LEFT)
+        self.status_lbl = tb.Label(header, text="● Простой", bootstyle="secondary")
+        self.status_lbl.pack(side=RIGHT)
 
-        ttk.Label(controls, text="COM порт").grid(row=0, column=0, sticky="w")
-        self.port_box = ttk.Combobox(controls, textvariable=self.port_var, width=18, state="readonly")
-        self.port_box.grid(row=0, column=1, sticky="w", padx=(8, 12))
-        ttk.Button(controls, text="Обновить", command=self.refresh_ports).grid(row=0, column=2, sticky="w")
+        settings = tb.Labelframe(self, text="Настройки", bootstyle="info")
+        settings.pack(fill=X, **pad)
 
-        ttk.Label(controls, text="Адреса").grid(row=0, column=3, sticky="w", padx=(16, 0))
-        ttk.Entry(controls, textvariable=self.address_start_var, width=8).grid(row=0, column=4, sticky="w", padx=(8, 4))
-        ttk.Entry(controls, textvariable=self.address_end_var, width=8).grid(row=0, column=5, sticky="w")
+        row1 = tb.Frame(settings)
+        row1.pack(fill=X, padx=10, pady=(8, 4))
+        tb.Label(row1, text="COM порт:").pack(side=LEFT)
+        self.port_box = tb.Combobox(row1, textvariable=self.port_var, width=16, state="readonly")
+        self.port_box.pack(side=LEFT, padx=8)
+        tb.Button(row1, text="Обновить", bootstyle="secondary-outline", command=self.refresh_ports).pack(side=LEFT)
 
-        ttk.Label(controls, text="Регистры").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ttk.Entry(controls, textvariable=self.registers_var, width=32).grid(row=1, column=1, columnspan=2, sticky="we", padx=(8, 12), pady=(10, 0))
+        tb.Label(row1, text="   Адреса:").pack(side=LEFT, padx=(20, 0))
+        addr_start = tb.Entry(row1, textvariable=self.address_start_var, width=6)
+        addr_start.pack(side=LEFT, padx=(8, 2))
+        tb.Label(row1, text="—").pack(side=LEFT)
+        addr_end = tb.Entry(row1, textvariable=self.address_end_var, width=6)
+        addr_end.pack(side=LEFT, padx=(2, 0))
 
-        ttk.Label(controls, text="Timeout").grid(row=1, column=3, sticky="w", padx=(16, 0), pady=(10, 0))
-        ttk.Entry(controls, textvariable=self.timeout_var, width=8).grid(row=1, column=4, sticky="w", padx=(8, 0), pady=(10, 0))
+        tb.Label(row1, text="   Timeout, с:").pack(side=LEFT, padx=(20, 0))
+        timeout_entry = tb.Entry(row1, textvariable=self.timeout_var, width=8)
+        timeout_entry.pack(side=LEFT, padx=8)
 
-        ttk.Label(controls, text="Скорости").grid(row=2, column=0, sticky="nw", pady=(10, 0))
-        baud_frame = ttk.Frame(controls)
-        baud_frame.grid(row=2, column=1, columnspan=5, sticky="w", pady=(10, 0))
-        for index, value in enumerate(DEFAULT_BAUDRATES):
-            ttk.Checkbutton(baud_frame, text=str(value), variable=self.baud_vars[value]).grid(row=index // 4, column=index % 4, sticky="w", padx=(0, 10))
+        row2 = tb.Frame(settings)
+        row2.pack(fill=X, padx=10, pady=(4, 10))
+        tb.Label(row2, text="Регистры:").pack(side=LEFT)
+        registers_entry = tb.Entry(row2, textvariable=self.registers_var, width=40)
+        registers_entry.pack(side=LEFT, padx=8)
+        tb.Label(row2, text="напр. 0-32 или 0,1,2,100,256", bootstyle="secondary").pack(side=LEFT)
 
-        ttk.Label(controls, text="Parity").grid(row=3, column=0, sticky="w", pady=(10, 0))
-        parity_frame = ttk.Frame(controls)
-        parity_frame.grid(row=3, column=1, sticky="w", pady=(10, 0))
-        for index, value in enumerate(DEFAULT_PARITIES):
-            ttk.Checkbutton(parity_frame, text=value, variable=self.parity_vars[value]).grid(row=0, column=index, sticky="w", padx=(0, 10))
+        options = tb.Labelframe(self, text="Перебор параметров", bootstyle="warning")
+        options.pack(fill=X, **pad)
 
-        ttk.Label(controls, text="Stop bits").grid(row=3, column=3, sticky="w", pady=(10, 0))
-        stop_frame = ttk.Frame(controls)
-        stop_frame.grid(row=3, column=4, columnspan=2, sticky="w", pady=(10, 0))
-        for index, value in enumerate(DEFAULT_STOPBITS):
-            ttk.Checkbutton(stop_frame, text=str(value), variable=self.stopbits_vars[value]).grid(row=0, column=index, sticky="w", padx=(0, 10))
+        def chip_row(parent, label, values, var_map):
+            row = tb.Frame(parent)
+            row.pack(fill=X, padx=10, pady=6)
+            tb.Label(row, text=label, width=12, bootstyle="secondary").pack(side=LEFT)
+            for value in values:
+                tb.Checkbutton(
+                    row, text=str(value), variable=var_map[value],
+                    bootstyle="info-toolbutton",
+                ).pack(side=LEFT, padx=(0, 6))
 
-        ttk.Label(controls, text="Функции").grid(row=4, column=0, sticky="w", pady=(10, 0))
-        function_frame = ttk.Frame(controls)
-        function_frame.grid(row=4, column=1, columnspan=5, sticky="w", pady=(10, 0))
-        for index, value in enumerate(DEFAULT_FUNCTIONS):
-            ttk.Checkbutton(function_frame, text=str(value), variable=self.function_vars[value]).grid(row=0, column=index, sticky="w", padx=(0, 10))
+        chip_row(options, "Скорости", DEFAULT_BAUDRATES, self.baud_vars)
+        chip_row(options, "Parity", DEFAULT_PARITIES, self.parity_vars)
+        chip_row(options, "Stop bits", DEFAULT_STOPBITS, self.stopbits_vars)
+        chip_row(options, "Функции", DEFAULT_FUNCTIONS, self.function_vars)
 
-        buttons = ttk.Frame(top, padding=(0, 12, 0, 12))
-        buttons.pack(fill="x")
-        ttk.Button(buttons, text="Старт", command=self.start_scan).pack(side="left")
-        ttk.Button(buttons, text="Стоп", command=self.stop_scan).pack(side="left", padx=(8, 0))
+        self._settings_widgets = [self.port_box, addr_start, addr_end, timeout_entry, registers_entry]
 
-        results = ttk.LabelFrame(top, text="Найдено", padding=10)
-        results.pack(fill="both", expand=True)
+        action_row = tb.Frame(self)
+        action_row.pack(fill=X, padx=12, pady=(0, 4))
+        self.toggle_btn = tb.Button(action_row, text="Старт", bootstyle="success", width=14, command=self._toggle)
+        self.toggle_btn.pack(side=LEFT)
+        self.progress = tb.Progressbar(action_row, bootstyle="info-striped", mode="indeterminate")
+        self.progress.pack(side=LEFT, fill=X, expand=True, padx=12)
+        self.hits_lbl = tb.Label(action_row, text="Найдено: 0", bootstyle="secondary")
+        self.hits_lbl.pack(side=RIGHT)
+
+        results = tb.Labelframe(self, text="Найдено", bootstyle="success")
+        results.pack(fill=BOTH, expand=True, padx=12, pady=8)
         columns = ("baud", "parity", "stopbits", "address", "function", "register", "response")
-        self.tree = ttk.Treeview(results, columns=columns, show="headings", height=12)
+        self.tree = tb.Treeview(results, columns=columns, show="headings", height=10, bootstyle="success")
         headings = {
             "baud": "Baud",
             "parity": "Parity",
@@ -107,40 +128,67 @@ class ScannerApp:
         for column in columns:
             self.tree.heading(column, text=headings[column])
             self.tree.column(column, width=widths[column], anchor="w")
-        self.tree.pack(fill="both", expand=True)
+        self.tree.pack(fill=BOTH, expand=True, padx=6, pady=6)
 
-        log_frame = ttk.LabelFrame(top, text="Лог", padding=10)
-        log_frame.pack(fill="both", expand=True, pady=(12, 0))
-        self.log_text = tk.Text(log_frame, height=12, wrap="word")
-        self.log_text.pack(fill="both", expand=True)
+        log_frame = tb.Labelframe(self, text="Журнал", bootstyle="secondary")
+        log_frame.pack(fill=BOTH, expand=True, padx=12, pady=(0, 12))
+        self.log_text = tb.ScrolledText(log_frame, height=8, wrap="word", font=("Consolas", 10))
+        self.log_text.pack(fill=BOTH, expand=True, padx=6, pady=6)
 
+    # ------------------------------------------------------------- helpers --
     def refresh_ports(self) -> None:
         ports = list_serial_ports()
         self.port_box["values"] = ports
         if ports and self.port_var.get() not in ports:
             self.port_var.set(ports[0])
 
-    def start_scan(self) -> None:
+    def _set_settings_state(self, enabled: bool) -> None:
+        combo_state = "readonly" if enabled else "disabled"
+        entry_state = "normal" if enabled else "disabled"
+        for widget in self._settings_widgets:
+            widget.configure(state=entry_state if isinstance(widget, tb.Entry) else combo_state)
+
+    def _toggle(self) -> None:
         if self.worker and self.worker.is_alive():
-            messagebox.showinfo("Сканер", "Сканирование уже идет.")
-            return
+            self.stop_scan()
+        else:
+            self.start_scan()
+
+    def start_scan(self) -> None:
         try:
             config = self._build_config()
         except Exception as exc:
-            messagebox.showerror("Ошибка", str(exc))
+            tb.dialogs.Messagebox.show_error(str(exc), "Ошибка")
             return
 
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.log_text.delete("1.0", "end")
+        self._hit_count = 0
+        self.hits_lbl.configure(text="Найдено: 0")
         self.stop_event.clear()
         self.worker = threading.Thread(target=self._scan_worker, args=(config,), daemon=True)
         self.worker.start()
+
+        self._set_settings_state(False)
+        self.toggle_btn.configure(text="Стоп", bootstyle="danger")
+        self.status_lbl.configure(text="● Сканирование", bootstyle="warning")
+        self.progress.start(12)
         self.log_bus.write("Старт сканирования.")
 
     def stop_scan(self) -> None:
         self.stop_event.set()
+        self.toggle_btn.configure(state="disabled")
         self.log_bus.write("Запрошена остановка.")
+
+    def _watch_worker(self) -> None:
+        if self.worker is not None and not self.worker.is_alive():
+            self.worker = None
+            self._set_settings_state(True)
+            self.toggle_btn.configure(text="Старт", bootstyle="success", state="normal")
+            self.status_lbl.configure(text="● Простой", bootstyle="secondary")
+            self.progress.stop()
+        self.after(200, self._watch_worker)
 
     def _build_config(self) -> ScanConfig:
         port = self.port_var.get().strip()
@@ -180,9 +228,10 @@ class ScannerApp:
         self.log_bus.write(
             f"{marker}: {hit.baudrate}/{hit.parity}/{hit.stopbits} addr={hit.address} func={hit.function_code} reg={hit.register} {hit.response_hex}"
         )
-        self.root.after(
-            0,
-            lambda: self.tree.insert(
+        self._hit_count += 1
+
+        def insert():
+            self.tree.insert(
                 "",
                 "end",
                 values=(
@@ -194,8 +243,12 @@ class ScannerApp:
                     hit.register,
                     hit.response_hex,
                 ),
-            ),
-        )
+                tags=("exception",) if hit.is_exception else (),
+            )
+            self.hits_lbl.configure(text=f"Найдено: {self._hit_count}")
+
+        self.tree.tag_configure("exception", foreground="#f0ad4e")
+        self.after(0, insert)
 
     def _drain_logs(self) -> None:
         while True:
@@ -205,17 +258,15 @@ class ScannerApp:
                 break
             self.log_text.insert("end", line + "\n")
             self.log_text.see("end")
-        self.root.after(100, self._drain_logs)
+        self.after(100, self._drain_logs)
 
     def _on_close(self) -> None:
         self.stop_event.set()
-        self.root.destroy()
+        self.destroy()
 
 
 def main() -> int:
-    root = tk.Tk()
-    ScannerApp(root)
-    root.mainloop()
+    ScannerApp().mainloop()
     return 0
 
 
